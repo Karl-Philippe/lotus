@@ -168,7 +168,7 @@ class Trainer:
                         wandb.log({"stoppcrit_loss": stoppcrit_loss.item()})
                         plot_fig_gt = self.plotter.plot_stopp_crit(caption="stopp_crit|real_us|reconstructed_us|seg_pred|gt_label",
                                                 imgs=[real_us_stopp_crit_img, reconstructed_us_stopp_crit, seg_pred_stopp_crit, real_us_stopp_crit_label], 
-                                                img_text='loss=' + "{:.4f}".format(stoppcrit_loss.item()), epoch=epoch, plot_single=False)
+                                                img_text='loss=' + "{:.4f}".format(stoppcrit_loss.item()), epoch=epoch, plot_single=False, plot_val=True)
                         stopp_crit_imgs_plot_figs.append(plot_fig_gt)
             
             if len(stopp_crit_imgs_plot_figs) > 0: 

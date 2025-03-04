@@ -15,7 +15,7 @@ class OriginalUNet(torch.nn.Module):
         super(OriginalUNet, self).__init__()
         self.hparams = hparams
         self.n_channels = 1     # grayscale
-        self.n_classes = 1      # binary segmentation
+        self.n_classes = hparams.n_classes # binary segmentation or multilabel
         self.bilinear = True
 
         self.inc = DoubleConv(self.n_channels, 32)
@@ -29,6 +29,21 @@ class OriginalUNet(torch.nn.Module):
         self.up3 = Up(128, 64 // factor, self.bilinear, self.hparams)
         self.up4 = Up(64, 32, self.bilinear, self.hparams)
         self.out = nn.Conv2d(32, self.n_classes, kernel_size=1)
+
+        larger_model = False
+
+        if larger_model:
+            self.inc = DoubleConv(self.n_channels, 64)
+            self.down1 = Down(64, 128)
+            self.down2 = Down(128, 256)
+            self.down3 = Down(256, 512)
+            factor = 2 if self.bilinear else 1
+            self.down4 = Down(512, 1024 // factor)
+            self.up1 = Up(1024, 512 // factor, self.bilinear, self.hparams)
+            self.up2 = Up(512, 256 // factor, self.bilinear, self.hparams)
+            self.up3 = Up(256, 128 // factor, self.bilinear, self.hparams)
+            self.up4 = Up(128, 64, self.bilinear, self.hparams)
+            self.out = nn.Conv2d(64, self.n_classes, kernel_size=1)
 
         # final layer for activation i.e. converting the logits to a value between 0 and 1
         # self.activation = nn.Softmax(dim=1)

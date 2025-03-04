@@ -45,17 +45,20 @@ class SegmentationUSRenderedModule(torch.nn.Module):
 
             channels = (32, 64, 128, 256, 512)
             print('MONAI channels: ', channels, 'DROPOUT: ', params.dropout_ratio)
-            self.outer_model = monai.networks.nets.UNet(
+            self.outer_model = monai.networks.nets.AttentionUnet(
                 spatial_dims=2,
                 in_channels=1,
-                out_channels=1,
+                out_channels=params.n_classes,
                 channels=channels,
                 strides=(2, 2, 2, 2),
-                num_res_units=2,
-                dropout = params.dropout_ratio
+                #num_res_units=2,
+                #dropout = params.dropout_ratio
             ).to(params.device)
 
-            self.loss_function = monai.losses.DiceLoss(sigmoid=True)
+            #self.loss_function = monai.losses.DiceLoss(sigmoid=True)
+            #self.loss_function = monai.losses.DiceCELoss(include_background=True,sigmoid=True,lambda_dice=0.5, lambda_ce=0.5)
+            
+            self.loss_function = SoftDiceLoss()  # without thresholding is soft DICE loss
 
         else:
             self.outer_model = outer_model.to(params.device)
@@ -97,6 +100,7 @@ class SegmentationUSRenderedModule(torch.nn.Module):
 
         if self.params.outer_model_monai:
             loss = self.loss_function(output, label)
+            loss = loss[0] if isinstance(loss, tuple) else loss  # Get the first element if it's a tuple
             pred=output
         else:
             loss, pred = self.loss_function(output, label)
@@ -128,7 +132,7 @@ class SegmentationUSRenderedModule(torch.nn.Module):
         if self.params.warp_img: 
             label = label.squeeze()
             label = torch.rot90(label, 1)
-            label = self.USRenderingModel.warp_img(label)
+            label = self.USRenderingModel.warp_label(label)
             label = torch.rot90(label, 3)
             label = label.unsqueeze(0).unsqueeze(0)
 
