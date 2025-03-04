@@ -8,8 +8,18 @@ from PIL import Image, ImageFont, ImageDraw
 import matplotlib.font_manager as fm
 import numpy as np
 from operator import *
+from matplotlib.colors import ListedColormap
 
 N = 16
+# Define the custom colormap
+label_cmap = ListedColormap([
+    "#000000",   # Black (background)
+    "#800080",  # Purple
+    "#0000FF",  # Blue
+    "#FF0000",  # Red
+    "#00BFFF",  # Light Blue
+])
+
 class Plotter():
     def __init__(self):
         self.figs = []
@@ -119,7 +129,7 @@ class Plotter():
         return plot_fig_pil_t
 
 
-    def plot_stopp_crit(self, caption, imgs, img_text, epoch, plot_single):
+    def plot_stopp_crit(self, caption, imgs, img_text, epoch, plot_single, plot_val=False):
         rows = 1
         cols = len(imgs)
         fig = plt.figure(figsize=(cols * 4, rows * 4))
@@ -127,12 +137,39 @@ class Plotter():
         spec.tight_layout(fig)
         for idx, img in enumerate(imgs):
             img = img.cpu().detach().squeeze()
-            if 'int' in str(img.dtype) :
-                img = np.rot90(img, 3)
-                plt.subplot(spec[0, idx]).imshow(img)
+            
+            # If the image has multiple channels (e.g., one-hot encoding), apply argmax
+            if len(img.shape) == 3 and img.shape[0] > 1:  # Shape (X, H, W)
+                img = img.argmax(axis=0)  # Collapse to class labels (H, W)
+
+            if plot_val:
+                # Check if the image is rendered_seg_pred and rotate accordingly
+                if idx == 2:
+                    img = np.rot90(img, 0)
+
+                if idx in [2, 3]:
+                    img = np.rot90(img, 0)
+                    plt.subplot(spec[0, idx]).imshow(img, cmap=label_cmap, interpolation='none')
+                elif 'int' in str(img.dtype):
+                    img = np.rot90(img, 3)
+                    plt.subplot(spec[0, idx]).imshow(img, interpolation='none')
+                else:
+                    plt.subplot(spec[0, idx]).imshow(img[:, :], cmap='gray', vmin=0, vmax=1, interpolation='none', norm=None)
+                plt.axis('off')
             else:
-                plt.subplot(spec[0, idx]).imshow(img[:, :], cmap='gray', vmin=0, vmax=1, interpolation='none', norm=None)
-            plt.axis('off')
+                # Check if the image is rendered_seg_pred and rotate accordingly
+                if idx == 3:
+                    img = np.rot90(img, 0)
+
+                if idx in [3, 4]:
+                    img = np.rot90(img, 0)
+                    plt.subplot(spec[0, idx]).imshow(img, cmap=label_cmap, interpolation='none')
+                elif 'int' in str(img.dtype):
+                    img = np.rot90(img, 3)
+                    plt.subplot(spec[0, idx]).imshow(img, interpolation='none')
+                else:
+                    plt.subplot(spec[0, idx]).imshow(img[:, :], cmap='gray', vmin=0, vmax=1, interpolation='none', norm=None)
+                plt.axis('off')
 
         plt.tight_layout()
         fig.subplots_adjust(wspace=0, hspace=0)
