@@ -4,17 +4,53 @@ import matplotlib.pyplot as plt
 import os
 from torchvision import transforms
 from math import pi
+import torch.nn.functional as F
+from scipy.ndimage import binary_erosion, binary_dilation
+from skimage.measure import label as skimage_label, regionprops
 
-# 2 - lung; 3 - fat; 4 - vessel; 6 - kidney; 8 - muscle; 9 - background; 11 - liver; 12 - soft tissue; 13 - bone; 
 # Default Parameters from: https://github.com/Blito/burgercpp/blob/master/examples/ircad11/liver.scene , labels 8, 9 and 12 approximated from other labels
+# Define properties for each category (acoustic_imped, attenuation, mu_0, mu_1, sigma_0)
+#               [imped,     att,    mu_0,   mu_1,   sigma_0]
+background =    [0.0004,    1.64,   0.78,   0.56,   0.1]
+soft_tissue =   [1.38,      0.63,   0.5,    0.5,    0.0]
+bone =          [7.8,       5.0,    0.78,   0.56,   0.1]
+lung =          [1.61,      0.18,   0.001,  0.0,    0.01]
+vessel =        [1.61,      0.18,   0.001,  0.01,   0.001]
+fat =           [1.65,      0.7,    0.4,    0.8,    0.14]
+liver =         [0.3,       0.54,   0.3,    0.2,    0.0]
 
-                     # indexes:           2       3     4     6     8      9     11    12    13
-acoustic_imped_def_dict = torch.tensor([0.0004, 1.38, 1.61,  1.62, 1.62,  0.3,  1.65, 1.63, 7.8], requires_grad=True).to(device='cuda')    # Z in MRayl
-attenuation_def_dict =    torch.tensor([1.64,   0.63, 0.18,  1.0,  1.09, 0.54,  0.7,  0.54, 5.0], requires_grad=True).to(device='cuda')    # alpha in dB cm^-1 at 1 MHz
-mu_0_def_dict =           torch.tensor([0.78,   0.5,  0.001, 0.45,  0.45,  0.3,  0.4, 0.45, 0.78], requires_grad=True).to(device='cuda') # mu_0 - scattering_mu   mean brightness
-mu_1_def_dict =           torch.tensor([0.56,   0.5,  0.0,   0.6,  0.64,  0.2,  0.8,  0.64, 0.56], requires_grad=True).to(device='cuda') # mu_1 - scattering density, Nr of scatterers/voxel
-sigma_0_def_dict =        torch.tensor([0.1,    0.0,  0.01,  0.3,  0.1,   0.0,  0.14, 0.1,  0.1], requires_grad=True).to(device='cuda') # sigma_0 - scattering_sigma - brightness std
+# Assign parameters in the correct index order
+label_parameters = {
+    1: background,  # Background
+    2: soft_tissue,  # Soft tissue
+    3: bone,  # Bone
+    4: lung,  # Lung
+    5: soft_tissue,  # Stomach
+    6: soft_tissue,  # Pancreas
+    7: soft_tissue,  # Spleen
+    8: vessel,  # Gallbladder
+    9: liver,  # Liver
+    11: vessel,  # MPV (Main Portal Vein)
+    12: vessel,  # LPV (Left Portal Vein)
+    13: vessel,  # PV-II
+    14: vessel,  # PV-III
+    15: vessel,  # PV-IV
+    16: vessel,  # RPV (Right Portal Vein)
+    17: vessel,  # PV-V
+    18: vessel,  # PV-VI
+    19: vessel,  # PV-VII
+    20: vessel,  # PV-VIII
+    21: vessel,  # HV (Hepatic Vein)
+    22: vessel,  # Inferior Vena Cava
+    23: fat,  # Tumor
+}
 
+# Convert parameters to tensors in the correct index order
+acoustic_imped_def_dict = torch.tensor([label_parameters[k][0] for k in sorted(label_parameters.keys())],requires_grad=True).to('cuda')
+attenuation_def_dict = torch.tensor([label_parameters[k][1] for k in sorted(label_parameters.keys())],requires_grad=True).to('cuda')
+mu_0_def_dict = torch.tensor([label_parameters[k][2] for k in sorted(label_parameters.keys())],requires_grad=True).to('cuda')
+mu_1_def_dict = torch.tensor([label_parameters[k][3] for k in sorted(label_parameters.keys())],requires_grad=True).to('cuda')
+sigma_0_def_dict = torch.tensor([label_parameters[k][4] for k in sorted(label_parameters.keys())],requires_grad=True).to('cuda')
 
 alpha_coeff_boundary_map = 0.1
 beta_coeff_scattering = 10  #100 approximates it closer
@@ -56,13 +92,36 @@ class UltrasoundRendering(torch.nn.Module):
             self.mu_1_dict = torch.nn.Parameter(mu_1_def_dict)
             self.sigma_0_dict = torch.nn.Parameter(sigma_0_def_dict)
 
-        self.labels = ["lung", "fat", "vessel", "kidney", "muscle", "background", "liver", "soft tissue", "bone"]
+            self.labels = [
+                "background",
+                "soft tissue",
+                "bone",
+                "lung",
+                "stomach",
+                "pancreas",
+                "spleen",
+                "gallbladder",
+                "liver",
+                "MPV",
+                "LPV",
+                "PV-II",
+                "PV-III",
+                "PV-IV",
+                "RPV",
+                "PV-V",
+                "PV-VI",
+                "PV-VII",
+                "PV-VIII",
+                "HV",
+                "Inferior Vena Cava",
+                "tumor"
+            ]
 
         self.attenuation_medium_map, self.acoustic_imped_map, self.sigma_0_map, self.mu_1_map, self.mu_0_map  = ([] for i in range(5))
 
 
     def map_dict_to_array(self, dictionary, arr):
-        mapping_keys = torch.tensor([2, 3, 4, 6, 8, 9, 11, 12, 13], dtype=torch.long).to(device='cuda')
+        mapping_keys = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], dtype=torch.long).to(device='cuda')
         keys = torch.unique(arr)
 
         index = torch.where(mapping_keys[None, :] == keys[:, None])[1]
@@ -169,8 +228,6 @@ class UltrasoundRendering(torch.nn.Module):
         maxRadius = 250
         
         h, w = inputImage.squeeze().shape
-
-        import torch.nn.functional as F
 
         # Create x and y grids
         x = torch.arange(resultWidth).float() - centerX
