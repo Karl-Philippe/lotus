@@ -63,10 +63,8 @@ class CT3DLabelmapDataset(Dataset):
         if self.offline_augmented_labelmap:
             self.transform_img = transforms.Compose([
                 transforms.ToTensor(),
-                transforms.RandomAffine(degrees=(0, 30), translate=(0.2, 0.2), scale=(0.9, 1.0), fill=9),
-                transforms.Resize([SIZE_W, SIZE_H], transforms.InterpolationMode.NEAREST),
+                transforms.RandomRotation(degrees=(90, 90)),  # Rotate 90 degrees counterclockwise
             ])
-
 
     def __len__(self):
         if self.params.debug:
@@ -125,10 +123,7 @@ class CT3DLabelmapDataset(Dataset):
     def preprocess(self, img, mask):
         if mask:
             img = np.where(img != self.params.pred_label, 0, 1)
-            
         return img 
-
-    
     def __getitem__(self, idx):
         if self.complex_aumgmentation:
             # Randomly sample a slice instead of using idx directly
