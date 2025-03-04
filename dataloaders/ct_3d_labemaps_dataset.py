@@ -5,7 +5,9 @@ import os
 import nibabel as nib
 from torch.utils.data import random_split
 import torchvision.transforms as transforms
-
+from monai.transforms import Compose, RandAffine, Rotate90, RandZoom, Resize, RandSpatialCrop
+from math import radians as rad
+from PIL import Image
 
 SIZE_W = 256
 SIZE_H = 256
@@ -13,6 +15,8 @@ class CT3DLabelmapDataset(Dataset):
     def __init__(self, params):
         self.params = params
         self.n_classes = params.n_classes
+        self.complex_aumgmentation = False
+        self.offline_augmented_labelmap = True
 
         self.base_folder_data_imgs = params.base_folder_data_path
         self.base_folder_data_masks = params.base_folder_mask_path
@@ -153,8 +157,14 @@ class CT3DLabelmapDataset(Dataset):
             torch.set_rng_state(state)
             mask_slice = self.transform_img(mask_slice)
 
-        mask_slice = torch.where(mask_slice != self.params.pred_label, 0, 1)
-        
+        mask_slice_remaped = torch.zeros_like(mask_slice)  # Initialize with zeros
+        mask_slice_remaped[mask_slice == 11] = 1  # MPV
+        mask_slice_remaped[(mask_slice >= 12) & (mask_slice <= 15)] = 2  # LPV
+        mask_slice_remaped[(mask_slice >= 16) & (mask_slice <= 20)] = 3  # RPV
+        mask_slice_remaped[mask_slice == 21] = 4  # HV
+
+        mask_slice = mask_slice_remaped
+
         # for spine we flip the labelmap horizontally
         if self.params.pred_label == 13:
             labelmap_slice = transforms.functional.hflip(labelmap_slice)
