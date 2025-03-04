@@ -50,7 +50,26 @@ class CT3DLabelmapDataset(Dataset):
                 transforms.CenterCrop((SIZE_W)),
             ])
 
-        if self.params.pred_label == 13:    # spine
+        self.transform_img_complex = Compose([
+            RandAffine(
+                prob=1,
+                rotate_range=(
+                    (rad(-45), rad(45)),
+                    (rad(-180), rad(180)),
+                    (rad(-15), rad(15))), # Random rotation range 30 360 10  (100, 100, 150)
+                translate_range=((-70,40), (-10, 10), (-80,120)),  # Random translation range 60 10 150 # -60 at 1.5 (-80,120 liver)
+                spatial_size=(SIZE_W, SIZE_H, 1),
+                mode='nearest',  # Interpolation mode
+            ),
+            RandZoom(
+                prob=1,
+                min_zoom=1,
+                max_zoom=1.2,
+                mode='nearest',
+            ),
+        ])
+
+        if self.offline_augmented_labelmap:
             self.transform_img = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.RandomAffine(degrees=(0, 30), translate=(0.2, 0.2), scale=(0.9, 1.0), fill=9),
@@ -91,18 +110,48 @@ class CT3DLabelmapDataset(Dataset):
 
     
     def __getitem__(self, idx):
+        if self.complex_aumgmentation:
+            # Randomly sample a slice instead of using idx directly
+            sampled_idx = np.random.randint(0, self.total_slices)
 
-        vol_nr = self.volume_indices[idx]
-        labelmap_slice = self.volumes[vol_nr][:, :, self.slice_indices[idx]].astype('int64')        #labelmap input to the US renderer
-        if self.full_labelmap_path_imgs != self.base_folder_data_masks:
-            mask_slice = self.mask_volumes[vol_nr][:, :, self.slice_indices[idx]].astype('int64')
+            vol_nr = self.volume_indices[sampled_idx]
+
+            state = torch.get_rng_state()
+            labelmap_volume = self.volumes[vol_nr]
+
+            # Ensure the channel dimension is first, for the entire volume (not just a slice)
+            if labelmap_volume.ndim == 3:  # Assuming it's 3D (H, W, D)
+                labelmap_volume = np.expand_dims(labelmap_volume, axis=0)  # Add a channel dimension first
+
+            # Apply transformations to the whole volume (EnsureChannelFirst ensures channel is first)
+            labelmap_image = self.transform_img_complex(labelmap_volume)
+
+            torch.set_rng_state(state)
+
+            # Convert back to int64 (in case transforms modified it)
+            labelmap_image = labelmap_image.to(dtype=torch.int64)
+
+            labelmap_image = labelmap_image.squeeze(0)
+
+            mask_image = labelmap_image
+
+            mask_image = mask_image.permute(2, 0, 1)  # Change from [256, 256, 1] to [1, 256, 256]
+            labelmap_image = labelmap_image.permute(2, 0, 1)  # Change from [256, 256, 1] to [1, 256, 256]
+
+            mask_slice = mask_image
+            labelmap_slice = labelmap_image
         else:
-            mask_slice = labelmap_slice
-
-        state = torch.get_rng_state()
-        labelmap_slice = self.transform_img(labelmap_slice)
-        torch.set_rng_state(state)
-        mask_slice = self.transform_img(mask_slice)
+            vol_nr = self.volume_indices[idx]
+            labelmap_slice = self.volumes[vol_nr][:, :, self.slice_indices[idx]].astype('int64')        #labelmap input to the US renderer
+            if self.full_labelmap_path_imgs != self.base_folder_data_masks:
+                mask_slice = self.mask_volumes[vol_nr][:, :, self.slice_indices[idx]].astype('int64')
+            else:
+                mask_slice = labelmap_slice.astype('int64')
+            
+            state = torch.get_rng_state()
+            labelmap_slice = self.transform_img(labelmap_slice)
+            torch.set_rng_state(state)
+            mask_slice = self.transform_img(mask_slice)
 
         mask_slice = torch.where(mask_slice != self.params.pred_label, 0, 1)
         
