@@ -159,14 +159,14 @@ class UltrasoundRendering(torch.nn.Module):
 
     # warp the linear US image to approximate US image from curvilinear US probe 
     def warp_img(self, inputImage):
-        resultWidth = 360
-        resultHeight = 220
-        centerX = resultWidth / 2
-        centerY = -120.0
-        maxAngle =  60.0 / 2 / 180 * pi #rad
+        resultWidth = 290
+        resultHeight = 200
+        centerX = resultWidth/2
+        centerY = -50
+        maxAngle = np.pi * 35 / 180
         minAngle = -maxAngle
-        minRadius = 140.0
-        maxRadius = 340.0
+        minRadius = 61
+        maxRadius = 250
         
         h, w = inputImage.squeeze().shape
 
