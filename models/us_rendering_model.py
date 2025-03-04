@@ -208,7 +208,75 @@ class UltrasoundRendering(torch.nn.Module):
         resultImage_resized = transforms.Resize((256,256))(resultImage).float().squeeze()
 
         return resultImage_resized
+    
+    # warp the label image to approximate the label image from curvilinear US probe
+    def warp_label(self, inputLabel):
+        resultWidth = 290
+        resultHeight = 200
+        centerX = resultWidth / 2
+        centerY = -50
+        maxAngle = np.pi * 35 / 180
+        minAngle = -maxAngle
+        minRadius = 61
+        maxRadius = 250
 
+        h, w = inputLabel.squeeze().shape
+
+        # Create x and y grids
+        x = torch.arange(resultWidth).float() - centerX
+        y = torch.arange(resultHeight).float() - centerY
+        xx, yy = torch.meshgrid(x, y)
+
+        # Calculate angle and radius
+        angle = torch.atan2(xx, yy)
+        radius = torch.sqrt(xx ** 2 + yy ** 2)
+
+        # Create masks for angle and radius
+        angle_mask = (angle > minAngle) & (angle < maxAngle)
+        radius_mask = (radius > minRadius) & (radius < maxRadius)
+
+        # Calculate original column and row
+        origCol = (angle - minAngle) / (maxAngle - minAngle) * w
+        origRow = (radius - minRadius) / (maxRadius - minRadius) * h
+
+        # Reshape input label to be a batch of 1 label
+        inputLabel = inputLabel.float().unsqueeze(0).unsqueeze(0)
+
+        # Scale original column and row to be in the range [-1, 1]
+        origCol = origCol / (w - 1) * 2 - 1
+        origRow = origRow / (h - 1) * 2 - 1
+
+        # Transpose input label to have channels first
+        inputLabel = inputLabel.permute(0, 1, 3, 2)
+
+        # Use grid_sample to interpolate
+        grid = torch.stack([origCol, origRow], dim=-1).unsqueeze(0).to('cuda')
+        resultLabel = F.grid_sample(inputLabel, grid, mode='nearest', align_corners=True)
+
+        # Apply masks and set values outside of mask to 0
+        resultLabel[~(angle_mask.unsqueeze(0).unsqueeze(0) & radius_mask.unsqueeze(0).unsqueeze(0))] = 0.0
+
+        # Convert resultLabel to numpy array for processing
+        resultLabel_resized = transforms.Resize((256, 256))(resultLabel).float().squeeze()
+        resultLabel_np = resultLabel_resized.cpu().numpy()
+
+        # Create a combined mask of all labels
+        combined_mask = (resultLabel_np > 0).astype(int)
+
+        # Apply dilatation
+        for label in range(4, 0, -1):
+            binary_label = (resultLabel_np == label).astype(int)
+            # Use a larger 7x7 kernel for dilation
+            dilated_label = binary_dilation(binary_label, structure=np.ones((6, 6))).astype(int)
+            resultLabel_np[dilated_label == 1] = label
+
+        # Apply the combined mask
+        resultLabel_np *= combined_mask  # Mask all labels based on the combined mask
+
+        # Convert back to torch tensor
+        resultLabel_resized = torch.from_numpy(resultLabel_np).float()
+
+        return resultLabel_resized
 
     def forward(self, ct_slice):
         if self.params.debug: self.plot_fig(ct_slice, "ct_slice", False)        
