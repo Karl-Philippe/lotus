@@ -1,5 +1,5 @@
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 import torch
 import os
 import nibabel as nib
@@ -29,30 +29,17 @@ class CT3DLabelmapDataset(Dataset):
         self.slice_indices, self.volume_indices, self.total_slices, self.volumes = self.read_volumes(self.full_labelmap_path_imgs)
         self.mask_slice_indices, self.mask_volume_indices, self.mask_total_slices, self.mask_volumes = self.read_volumes(self.full_labelmap_path_masks)
 
-
-        if self.params.aorta_only:
-            # self.transform_img = transforms.Compose([
-            #     transforms.ToTensor(),
-            #     transforms.RandomAffine(degrees=(0, 30), translate=(0.2, 0.2), scale=(1.0, 2.0), fill=9),
-            #     transforms.Resize([SIZE_W, SIZE_H], transforms.InterpolationMode.NEAREST),
-            # ])
-            self.transform_img = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Resize([380, 380], transforms.InterpolationMode.NEAREST),
-                transforms.CenterCrop((SIZE_W)),
-            ])
-        else:
-            # self.transform_img = transforms.Compose([
-            #     transforms.ToTensor(),
-            #     # transforms.RandomAffine(degrees=(0, 30), translate=(0.2, 0.2), scale=(1.0, 2.0), fill=9),
-            #     # transforms.Resize([SIZE_W, SIZE_H], transforms.InterpolationMode.NEAREST),
-            #     # transforms.RandomVerticalFlip()
-            # ])
-            self.transform_img = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Resize([380, 380], transforms.InterpolationMode.NEAREST),
-                transforms.CenterCrop((SIZE_W)),
-            ])
+        self.transform_img = transforms.Compose([
+            transforms.ToTensor(),
+            #transforms.RandomAffine(
+            #    degrees=(0, 0), 
+            #    translate=(0.1, 0),
+            #    scale=(1, 1.4), 
+            #    fill=1
+            #),
+            transforms.Resize([380, 380], transforms.InterpolationMode.NEAREST),
+            transforms.CenterCrop((SIZE_W)),
+        ])
 
         self.transform_img_complex = Compose([
             RandAffine(
@@ -94,15 +81,44 @@ class CT3DLabelmapDataset(Dataset):
         volumes = []
 
         for idx, folder in enumerate(full_labelmap_path):
-            labelmap = [lm for lm in sorted(os.listdir(folder)) if lm.endswith('.nii.gz') and "_" not in lm][0]
-            vol_nib = nib.load(folder + labelmap)
-            vol = vol_nib.get_fdata()
+            # Ensure the folder path ends with a separator
+            folder_path = os.path.join(folder, "")
 
-            slice_indices.extend(np.arange(vol.shape[2]))  #append the vol indexes
-            volume_indices.extend(np.full(shape=vol.shape[2], fill_value=idx, dtype=np.int32))  #append the vol indexes
-            total_slices += vol.shape[2]
-            volumes.append(vol)
-        
+            if self.offline_augmented_labelmap:
+                # Load augmented PNGs if enabled
+                png_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.png')])
+
+                volume_slices = []
+                for png_file in png_files:
+                    img_path = os.path.join(folder_path, png_file)
+                    img = Image.open(img_path).convert('L')
+                    img_np = np.array(img, dtype=np.int64)
+                    volume_slices.append(img_np)
+                
+                volume = np.stack(volume_slices, axis=-1)
+                volumes.append(volume)
+
+                slice_indices.extend(np.arange(volume.shape[2]))
+                volume_indices.extend(np.full(shape=volume.shape[2], fill_value=idx, dtype=np.int32))
+                total_slices += volume.shape[2]
+
+            else:
+                # Find the .nii.gz file in the subdirectory
+                labelmap_files = [lm for lm in sorted(os.listdir(folder_path)) if lm.endswith('.nii.gz') and "_" not in lm]
+                if not labelmap_files:
+                    raise FileNotFoundError(f"No valid .nii.gz files found in {folder_path}")
+
+                # Load the volume
+                labelmap = labelmap_files[0]  # Assume the first valid file is the correct one
+                vol_nib = nib.load(os.path.join(folder_path, labelmap))
+                vol = vol_nib.get_fdata()
+
+                # Store slice indices and volume information
+                slice_indices.extend(np.arange(vol.shape[2]))  # Append slice indices
+                volume_indices.extend(np.full(shape=vol.shape[2], fill_value=idx, dtype=np.int32))  # Append the volume index
+                total_slices += vol.shape[2]
+                volumes.append(vol)
+
         return slice_indices, volume_indices, total_slices, volumes
 
 
@@ -183,13 +199,35 @@ class CT3DLabelmapDataLoader():
         super().__init__()
         self.params = params
 
+    def get_downsampled_indices(self, dataset, ratio):
+        dataset_size = len(dataset)
+        subset_size = int(dataset_size * ratio)
+        indices = np.random.permutation(dataset_size)[:subset_size]
+        return indices
+
+    # Create DataLoader with SubsetRandomSampler
+    def get_downsampled_loader(self, dataset, batch_size, num_workers, ratio):
+        indices = self.get_downsampled_indices(dataset, ratio)
+        sampler = SubsetRandomSampler(indices)
+        loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
+        return loader
+
     def train_dataloader(self):
-        full_dataset = CT3DLabelmapDataset(self.params) 
-        train_size = int(0.8 * len(full_dataset))
+        full_dataset = CT3DLabelmapDataset(self.params)
+        
+        split_ratio = 1 - 200*2 / len(full_dataset)
+        train_size = int(split_ratio * len(full_dataset))
         val_size = len(full_dataset) - train_size
 
+        downsample_ratio = 800*2 / train_size  
+
         self.train_dataset, self.val_dataset = random_split(full_dataset, [train_size, val_size])
-        train_loader = DataLoader(self.train_dataset, batch_size=self.params.batch_size, shuffle=True, num_workers=self.params.num_workers)
+
+        # Create DataLoader for training with downsampling
+        train_loader = self.get_downsampled_loader(self.train_dataset, 
+                                                   batch_size=self.params.batch_size, 
+                                                   num_workers=self.params.num_workers, 
+                                                   ratio=downsample_ratio)
         
         return train_loader, self.train_dataset, self.val_dataset 
 
